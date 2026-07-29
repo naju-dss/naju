@@ -1,4 +1,4 @@
-# Naju
+# Naju (Native Adaptive Junction Unit)
 
 Official implementation of **Naju**, a natively discrete gated state-space
 model with independent retention and writing
