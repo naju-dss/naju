@@ -1,4 +1,4 @@
-# Naju v1
+# Naju
 
 Reference implementation of **Naju**, a natively discrete gated state-space
 model: decoupled forget/input sigmoid gates drive a diagonal recurrence with no
