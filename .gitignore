@@ -1,3 +1,7 @@
 __pycache__/
 *.pyc
 .cache/
+evals/synthetic/data/cache/
+evals/synthetic/results/
+evals/lm/data/wikitext103_raw/
+evals/lm/results/

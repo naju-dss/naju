@@ -1,0 +1,14 @@
+# Mamba reference configuration (d_model 256, d_state 16).
+model: mamba
+d_model: 256
+n_layers: 4
+d_state: 16
+expand: 2
+dropout: 0.1
+
+lr: 3.0e-4
+weight_decay: 1.0e-4
+epochs: 50
+warmup_ratio: 0.05
+batch_size: 32
+grad_clip: 1.0

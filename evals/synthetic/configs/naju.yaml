@@ -1,0 +1,19 @@
+# Naju (paper configuration): d_model 128, d_state 64, b_f +5, b_i -2,
+# 1/sqrt(N) readout norm + D*h feedthrough (init 0.01), z-gate.
+model: naju
+d_model: 128
+n_layers: 4
+d_state: 64
+expand: 2
+dropout: 0.1
+gate_conv_kernel: 4
+forget_bias_init: 5.0
+input_bias_init: -2.0
+d_init: 0.01
+
+lr: 3.0e-4
+weight_decay: 1.0e-4
+epochs: 50
+warmup_ratio: 0.05
+batch_size: 32
+grad_clip: 1.0

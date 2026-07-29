@@ -1,130 +1,116 @@
-# Naju v1
+# Naju
 
-Reference implementation of **Naju**, a natively discrete gated state-space
-model: decoupled forget/input sigmoid gates drive a diagonal recurrence with no
-ZOH discretization, read out through a normalized state readout plus a learnable
-feedthrough, and gated by a GLU-style output gate. Constructor defaults are the
-paper's final configuration — `NajuMixer(d_model)` is exactly the model used in
-the paper's experiments.
-
-## Model
-
-Notation: $u^{(l)}$ is the residual stream (block input/output), $h$ the
-convolved content branch, $n$ the token index, $N$ = `d_state`.
+Official implementation of **Naju**, a natively discrete gated state-space
+model with independent retention and writing
+([arXiv:2607.21000](https://arxiv.org/abs/2607.21000)). Contents:
 
 ```
-ũ = RMSNorm(u^{(l)})                          pre-norm (NajuBlock)
-[x_raw, z_n] = W_in ũ_n                       in_proj: d_model -> 2 d_inner
-h_n  = SiLU(DWConv(x_raw))                    content branch (causal dwconv, k=4)
-[B_n, C_n] = W_x h_n                          x_proj: d_inner -> 2 d_state
-a_n  = W_f h_n + DWConv_f(h_n) + b_f          forget logit  (b_f init +5)
-c_n  = W_i h_n + DWConv_i(h_n) + b_i          input  logit  (b_i init -2)
-x_n  = σ(a_n) ⊙ x_{n-1} + σ(c_n) ⊙ B_n h_n    scan (run with D=0)
-cx_n = (1/√N) C_n · x_n                       readout normalization
-y_n  = cx_n + D ⊙ h_n                         feedthrough (D learnable, init 0.01)
-
-u^{(l+1)}_n = u^{(l)}_n + W_o(y_n ⊙ SiLU(z_n))    block output (residual)
+naju/            reference implementation of the Naju model (mixer, scan
+                 kernels, optimizer coupling, CPU/GPU test suites)
+                 — see naju/README.md
+evals/synthetic/ T1-T4 synthetic suite (data generators + training harness,
+                 Naju and all baselines)
+evals/lm/        WikiText-103 language-modeling harness (Naju / Mamba /
+                 Mamba-2 / Transformer)
 ```
 
-The current input reaches the next layer by two routes: the gated feedthrough
-$D h_n$ inside the SSM branch (passes through the z-gate and $W_o$), and the
-clean identity path of the outer residual.
-
-Two elements are fixed parts of the block, not options:
-
-- **Readout normalization** $cx \leftarrow cx/\sqrt{N}$ (attention-style) —
-  keeps the readout magnitude independent of `d_state`. Note this is a
-  per-task readout *scale correction*, not a stability device: the recurrence
-  is BIBO-stable regardless (the sigmoid pole is < 1).
-- **z-gate** $y \odot \mathrm{SiLU}(z)$ — the GLU/SwiGLU-style output gate,
-  the analogue of an LSTM output gate.
-
-## Options (`NajuMixer`)
-
-Defaults reproduce the paper configuration; change them only for ablations.
-
-| Argument | Default | Meaning |
-|---|---|---|
-| `d_state` | 64 | state dimension $N$ (the LM scale-up also uses 128) |
-| `expand` | 2 | `d_inner = expand * d_model` |
-| `d_conv` | 4 | content-branch causal depthwise-conv kernel |
-| `gate_conv_kernel` | 4 | gate local-conv kernel (gates = proj + conv + bias) |
-| `forget_bias_init` | +5.0 | preserve-first init: retention can approach 1; sets a well-conditioned decay pole ($1-f \lesssim 1/L$ maps bias to memory horizon) |
-| `input_bias_init` | −2.0 | write gate starts mostly closed (selective writing) |
-| `d_init` | 0.01 | init scale of the feedthrough $D$ (1.0 = Mamba convention). Small init lets the feedthrough start negligible and grow only where the task wants it — large init creates a shortcut that suppresses recall learning |
-| `gate_rank` | None | low-rank factorization of the gate projections. Ablation only: the paper's diagnostic shows the gates are not the latency bottleneck (the scan is). Incompatible with `gate_reparam` |
-| `gate_reparam` | False | full optimizer-matched gate reparameterization (below) |
-| `scan_backend` | None | scan kernel selection (below) |
-
-### Gate reparameterization (`gate_reparam=True`)
-
-From the paper's scale-up study: (1) model side — gate weights scaled up by
-$\sqrt{d_{inner}}$ at init and the pre-activation divided back down (the
-initial forward is identical; only the Adam update dynamics change), (2)
-optimizer side — `build_optimizer` detects the flag and gives the gate
-projections a matched group: lr × $\sqrt{d_{inner}}$, weight decay ÷
-$\sqrt{d_{inner}}$ (AdamW applies decay as lr·wd — without this the gate
-weights are annihilated), Adam ε ÷ $\sqrt{d_{inner}}$. The two halves are one
-mechanism and cannot be enabled separately. Verified as a no-op A/B across
-widths; its purpose is letting the inherited learning rate carry to larger
-widths.
-
-```python
-opt = build_optimizer(model, lr=4e-3, weight_decay=0.1)   # auto-detects the flag
-```
-
-## Scan backends (`scan.py`) — one per role
-
-| Backend | Role | Requirements | Notes |
-|---|---|---|---|
-| `reference` | correctness ground truth | any device, no deps | sequential loop; slow |
-| `chunk` | **training standard** | GPU + Triton | SSD-style chunk-parallel; exact for `f_logit ≥ −5`, auto-falls back to `cuda` beyond |
-| `cuda` | chunk's fallback; memory-light long-T training | GPU + nvcc (JIT) | exact for any logit; sequential training path with checkpoint-recompute backward, chunk-parallel inference path |
-| `cuda_bw` | **inference standard** | GPU + nvcc (JIT) | warp-shuffle kernels, 2.5–3.2× faster inference; the paper's efficiency tables use this backend under `no_grad` |
-
-Selection order: explicit argument > `NAJU_SCAN_BACKEND` env > auto (`chunk`
-if CUDA is available, else `reference`).
-
-## torch.compile (recommended for training)
-
-Measured in the paper's training-efficiency study (BF16, chunk backend):
-`torch.compile(mode="max-autotune")` raises Naju training throughput by
-**+22–24%, length-invariant** (the eager path leaves the gate-logit sums,
-readout gain, and output-gate products unfused; the compiler recovers them).
-The scan is a custom autograd Function, so a graph break occurs at its
-boundary — the gain above already includes that.
-
-Skip compilation for numerics debugging and equivalence testing (fusion changes
-floating-point op order), and pass `dynamic=True` (or fix the sequence length)
-to avoid recompiles under variable `T`.
-
-## Usage
-
-```python
-import torch
-from naju import NajuLM, build_optimizer
-
-model = NajuLM(vocab_size=50257, d_model=2048, n_layers=6, d_state=128)
-model = torch.compile(model.cuda(), mode="max-autotune")
-opt = build_optimizer(model, lr=4e-3, weight_decay=0.1)
-```
-
-`NajuBlock(use_ckpt=True)` enables block-level gradient checkpointing
-(identical numerics, activations recomputed in backward) — prefer it over
-shrinking the batch when memory-bound at long sequence lengths.
-
-Checkpoints trained with the original research code load directly
-(`strict=True`): parameter names are identical.
-
-## Tests
+## Setup
 
 ```bash
-python naju/tests/test_equivalence.py   # CPU: model equivalence, reparam, optimizer coupling
-python naju/tests/test_gpu_smoke.py     # GPU: all scan backends vs reference (fwd + grads)
+pip install -r requirements.txt
 ```
 
-The CPU suite covers the model math (plus an equivalence check against the
-original research implementation that auto-skips when that repo is not
-present). The GPU suite verifies `chunk`, `cuda`, and `cuda_bw` against the
-reference scan — forward, all input gradients, the deep-logit fallback route,
-and the `no_grad` inference path — in under 100 MiB of GPU memory.
+Core requirements are `torch` (with a matching `triton`, bundled in CUDA
+builds), `numpy`, `pyyaml`. Optional per-baseline extras: `mamba-ssm`
+(Mamba / Mamba-2), `flash-linear-attention` (GLA / HGRN / RWKV-6 / RetNet),
+`xlstm` (xLSTM), `transformers` + `pyarrow` (WikiText-103 tokenization). All
+baseline imports are lazy — Naju-only runs need none of the extras.
+
+Optional sanity checks (naju kernel test suites):
+
+```bash
+python naju/tests/test_equivalence.py   # CPU
+python naju/tests/test_gpu_smoke.py     # GPU: all scan backends vs reference
+```
+
+## Synthetic suite (T1–T4)
+
+Run from `evals/synthetic/`. 1) Generate data at the training length (512) and the
+extrapolation lengths (1024, 2048 — test splits are all that is used at those
+lengths):
+
+```bash
+for L in 512 1024 2048; do
+  # T1: key-value retrieval
+  python data/generate_kv_retrieval.py --seq_len $L
+  # T2: scattered key-value retrieval
+  python data/generate_kv_hard.py --task kv_spread --num_entities 32 \
+      --n_facts 32 --num_values 16 --spread --seq_len $L
+  # T3: current-state tracking
+  python data/generate_state_tracking.py --seq_len $L
+  # T4: recency-only current-state tracking
+  python data/generate_st_hard.py --spread --num_values 16 --num_entities 32 \
+      --max_distractor_entities 8 --seq_len $L
+done
+```
+
+2) Train (per model / task / seed; the paper reports mean±std over seeds 1–5):
+
+```bash
+python train.py --model naju  --task kv_spread --seq_len 512 --seed 1 \
+    --eval_seq_lens 1024 2048
+python train.py --model mamba --task kv_spread --seq_len 512 --seed 1 \
+    --eval_seq_lens 1024 2048
+```
+
+Models: `naju mamba transformer mamba2 xlstm gla hgrn rwkv retnet`
+(configs in `configs/*.yaml`; defaults follow the paper's stated
+configurations — Naju d128/N64, Mamba reference d256/N16, 50-epoch budget).
+The Mamba width/state factorial uses `--d_model`/`--d_state` overrides; the
+extended-budget Transformer rows use `--epochs 150`; data-efficiency runs use
+`--max_train`. Results are written as JSON under `results/` (test metrics plus
+per-length extrapolation, position/distance-bucketed accuracies, and the
+stale-answer rate for T3/T4).
+
+## WikiText-103
+
+Run from `evals/lm/`. Download the WikiText-103-raw-v1 parquet files
+(HuggingFace dataset `wikitext`, config `wikitext-103-raw-v1`) into
+`evals/lm/data/wikitext103_raw/` (file names in `evals/lm/data.py`). Tokenization (GPT-2
+BPE, one EOS per document) runs once and is cached.
+
+Paper protocol — 1.2B-token budget, 32,768 tokens per optimizer update,
+selection on best validation PPL, per-model learning rate:
+
+```bash
+python train.py --backbone naju        --seed 1 --target_tokens 1200000000 \
+    --seq_len 1024 --batch_size 8 --grad_accum 4 --lr 4e-3
+python train.py --backbone mamba       --seed 1 --target_tokens 1200000000 \
+    --seq_len 1024 --batch_size 8 --grad_accum 4 --lr 4e-3
+python train.py --backbone mamba2      --seed 1 --target_tokens 1200000000 \
+    --seq_len 1024 --batch_size 8 --grad_accum 4 --lr 4e-3
+python train.py --backbone transformer --seed 1 --target_tokens 1200000000 \
+    --seq_len 1024 --batch_size 8 --grad_accum 4 --lr 2e-3
+```
+
+Naju uses the paper-final configuration (the `naju` defaults) with the
+chunk-parallel scan backend selected automatically on GPU. Width/state
+scale-up rows use `--d_model` / `--d_state` / `--n_layers` overrides.
+
+## Not included
+
+The MQAR and Long Range Arena experiments build on third-party harnesses
+(zoology; the LRA data pipeline); to keep this repository self-contained they
+are not bundled.
+
+## Citation
+
+```bibtex
+@article{lim2026naju,
+  title={Naju: A Native Discrete State-Space Model with Independent Retention
+         and Writing for Long-Sequence Memory},
+  author={Lim, Hyuk and Yoon, Seunghyun},
+  journal={arXiv preprint arXiv:2607.21000},
+  year={2026}
+}
+```

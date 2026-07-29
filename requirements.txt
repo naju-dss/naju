@@ -1,0 +1,11 @@
+# core
+torch>=2.4          # CUDA builds bundle a matching triton (needed for the chunk scan)
+numpy
+pyyaml
+
+# optional, per baseline / experiment (all imports are lazy)
+# mamba-ssm               # Mamba / Mamba-2 baselines
+# flash-linear-attention  # GLA / HGRN / RWKV-6 / RetNet baselines
+# xlstm                   # xLSTM baseline
+# transformers            # WikiText-103 GPT-2 BPE tokenization (one-time)
+# pyarrow                 # WikiText-103 parquet reading (one-time)

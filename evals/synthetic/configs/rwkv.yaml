@@ -1,0 +1,13 @@
+model: rwkv
+kind: rwkv
+d_model: 128
+n_layers: 4
+n_heads: 4
+dropout: 0.1
+
+lr: 3.0e-4
+weight_decay: 1.0e-4
+epochs: 50
+warmup_ratio: 0.05
+batch_size: 32
+grad_clip: 1.0
