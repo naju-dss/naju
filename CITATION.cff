@@ -1,0 +1,21 @@
+cff-version: 1.2.0
+message: "If you use Naju, please cite the following paper."
+title: "Naju"
+type: software
+authors:
+  - family-names: "Lim"
+    given-names: "Hyuk"
+  - family-names: "Yoon"
+    given-names: "Seunghyun"
+repository-code: "https://github.com/naju-dss/naju"
+url: "https://arxiv.org/abs/2607.21000"
+preferred-citation:
+  type: article
+  title: "Naju: A Native Discrete State-Space Model with Independent Retention and Writing for Long-Sequence Memory"
+  authors:
+    - family-names: "Lim"
+      given-names: "Hyuk"
+    - family-names: "Yoon"
+      given-names: "Seunghyun"
+  year: 2026
+  url: "https://arxiv.org/abs/2607.21000"
