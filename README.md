@@ -26,13 +26,8 @@ builds), `numpy`, `pyyaml`. Optional per-baseline extras: `mamba-ssm`
 `xlstm` (xLSTM), `transformers` + `pyarrow` (WikiText-103 tokenization). All
 baseline imports are lazy — Naju-only runs need none of the extras.
 
-Optional sanity checks (naju kernel test suites):
-
-```bash
-python naju/tests/test_equivalence.py   # CPU
-python naju/tests/test_gpu_smoke.py     # GPU: all scan backends vs reference
-python naju/tests/test_affine_chunk.py  # GPU: experimental affine backend
-```
+Optional sanity checks (model and kernel test suites): see the Tests
+section of `naju/README.md`.
 
 ## Experiments
 
