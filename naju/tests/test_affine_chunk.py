@@ -139,6 +139,36 @@ def test_backward_gpu():
     print(f"4. GPU grads vs reference autograd: all inputs, worst {worst:.2e}")
 
 
+def test_bf16_io():
+    """BF16-native path (autocast training regime): fp32-reference agreement
+    within the plan's BF16 tolerance, forward and grads."""
+    from naju.chunk_affine_triton import naju_affine_chunk_scan
+
+    B_, T, D, N = 4, 512, 128, 64
+    ins32 = _rand_inputs(B_, T, D, N, "cuda", seed=5)
+    # quantize ONCE, then compare backend vs reference on the SAME bf16 data
+    # (isolates kernel error from input-quantization noise)
+    ins16 = [t.to(torch.bfloat16).requires_grad_(True) for t in ins32]
+    ref_in = [t.detach().float().requires_grad_(True) for t in ins16]
+    ref = naju_scan_reference(*ref_in)
+
+    y16 = naju_affine_chunk_scan(*ins16)
+    assert y16.dtype == torch.bfloat16, "bf16 in should give bf16 out"
+    d = maxdiff(ref, y16.float())
+    torch.testing.assert_close(y16.float(), ref, rtol=2e-2, atol=2e-2)
+
+    g = torch.Generator(device="cpu").manual_seed(13)
+    dy16 = torch.randn(B_, T, D, generator=g).to("cuda").to(torch.bfloat16)
+    ref.backward(dy16.float())
+    y16.backward(dy16)
+    worst = 0.0
+    for r, a in zip(ref_in, ins16):
+        gw = (r.grad - a.grad.float()).abs().max().item()
+        worst = max(worst, gw)
+        torch.testing.assert_close(a.grad.float(), r.grad, rtol=5e-2, atol=5e-2)
+    print(f"6. bf16 I/O: fwd maxdiff {d:.2e} (tol 2e-2), grads worst {worst:.2e}")
+
+
 def test_long_sequence():
     from naju.chunk_affine_triton import naju_affine_chunk_scan
     from naju.chunk_triton import naju_chunk_scan
@@ -160,6 +190,7 @@ if __name__ == "__main__":
         test_forward_gpu()
         test_deep_gate_exactness()
         test_backward_gpu()
+        test_bf16_io()
         test_long_sequence()
         print("ALL PASS")
     else:

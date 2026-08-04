@@ -66,8 +66,8 @@ def _affine_local_kernel(u_ptr, fl_ptr, il_ptr, B_ptr, C_ptr,
         z = f[:, None] * z + w[:, None] * Bt[None, :]
         p = p * f
         cz = tl.sum(Ct[None, :] * z, axis=1)          # [BD]
-        tl.store(cz_ptr + td, cz, mask=dm)
-        tl.store(P_ptr + td, p, mask=dm)
+        tl.store(cz_ptr + td, cz.to(cz_ptr.dtype.element_ty), mask=dm)
+        tl.store(P_ptr + td, p.to(P_ptr.dtype.element_ty), mask=dm)
 
     tl.store(F_ptr + (b * K + k) * D + offs_d, p, mask=dm)
     w_off = ((b * K + k) * D + offs_d)[:, None] * N + offs_n[None, :]
@@ -100,13 +100,13 @@ def _affine_correct_kernel(u_ptr, cz_ptr, P_ptr, C_ptr, S0_ptr, Dskip_ptr,
 
     td = (b * T + k * Q + offs_q)[:, None] * D + offs_d[None, :]
     m2 = dm[None, :]
-    cz = tl.load(cz_ptr + td, mask=m2, other=0.0)
-    P = tl.load(P_ptr + td, mask=m2, other=0.0)
-    uu = tl.load(u_ptr + td, mask=m2, other=0.0)
+    cz = tl.load(cz_ptr + td, mask=m2, other=0.0).to(tl.float32)
+    P = tl.load(P_ptr + td, mask=m2, other=0.0).to(tl.float32)
+    uu = tl.load(u_ptr + td, mask=m2, other=0.0).to(tl.float32)
     Dk = tl.load(Dskip_ptr + offs_d, mask=dm, other=0.0).to(tl.float32)
 
     y = cz + P * corr + Dk[None, :] * uu
-    tl.store(y_ptr + td, y, mask=m2)
+    tl.store(y_ptr + td, y.to(y_ptr.dtype.element_ty), mask=m2)
 
 
 class _AffineChunkScan(torch.autograd.Function):
@@ -115,14 +115,17 @@ class _AffineChunkScan(torch.autograd.Function):
         B_, T, D = u.shape
         N = B.shape[-1]
         K = T // Q
-        dt = torch.float32
+        # bf16/fp16 inputs stay in their dtype (loads upconvert in-kernel,
+        # recurrence/summaries accumulate fp32) — halves the dominant Phase A
+        # traffic under autocast training. fp32 inputs behave as before.
+        dt = u.dtype if u.dtype in (torch.bfloat16, torch.float16) else torch.float32
         uc, flc, ilc = (t.contiguous().to(dt) for t in (u, f_logit, i_logit))
         Bc, Cc = B.contiguous().to(dt), C.contiguous().to(dt)
 
         cz = torch.empty(B_, T, D, device=u.device, dtype=dt)
         P = torch.empty(B_, T, D, device=u.device, dtype=dt)
-        Fc = torch.empty(B_, K, D, device=u.device, dtype=dt)
-        Wc = torch.empty(B_, K, D, N, device=u.device, dtype=dt)
+        Fc = torch.empty(B_, K, D, device=u.device, dtype=torch.float32)
+        Wc = torch.empty(B_, K, D, N, device=u.device, dtype=torch.float32)
         BD = 64
         BN = max(16, triton.next_power_of_2(N))
         grid = (B_ * K, triton.cdiv(D, BD))

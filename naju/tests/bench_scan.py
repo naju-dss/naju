@@ -17,6 +17,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(_HERE)))
 import torch
 
 
+DTYPE = torch.float32
+
+
 def _rand_inputs(B_, T, D, N, device, requires_grad=False):
     g = torch.Generator(device="cpu").manual_seed(0)
     def r(*s):
@@ -27,7 +30,7 @@ def _rand_inputs(B_, T, D, N, device, requires_grad=False):
     B = r(B_, T, N) / (N ** 0.5)
     C = r(B_, T, N) / (N ** 0.5)
     D_skip = r(D) * 0.01
-    ts = [u, fl, il, B, C, D_skip]
+    ts = [t.to(DTYPE) for t in (u, fl, il, B, C, D_skip)]
     if requires_grad:
         ts = [t.requires_grad_(True) for t in ts]
     return ts
@@ -62,7 +65,7 @@ def bench(name, scan_fn, shape, warmup, iters, mode):
                 med, p10, p90 = _time(lambda: scan_fn(*ins), warmup, iters)
         else:
             ins = _rand_inputs(B_, T, D, N, "cuda", requires_grad=True)
-            dy = torch.randn(B_, T, D, device="cuda")
+            dy = torch.randn(B_, T, D, device="cuda", dtype=DTYPE)
             def step():
                 y = scan_fn(*ins)
                 y.backward(dy)
@@ -86,7 +89,11 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--iters", type=int, default=30)
     ap.add_argument("--warmup", type=int, default=10)
+    ap.add_argument("--dtype", choices=["fp32", "bf16"], default="fp32",
+                    help="input tensor dtype (bf16 = autocast training regime)")
     args = ap.parse_args()
+    global DTYPE
+    DTYPE = torch.bfloat16 if args.dtype == "bf16" else torch.float32
 
     from naju.chunk_triton import naju_chunk_scan
     from naju.chunk_affine_triton import naju_affine_chunk_scan
