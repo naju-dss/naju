@@ -169,6 +169,31 @@ def test_bf16_io():
     print(f"6. bf16 I/O: fwd maxdiff {d:.2e} (tol 2e-2), grads worst {worst:.2e}")
 
 
+def test_deep_gate_grads():
+    """Gradients at f_logit ~ -12 vs reference autograd — the guard-free
+    affine backward's new capability (the shared v4 backward NaNs/falls back
+    below f_logit ~ -5)."""
+    from naju.chunk_affine_triton import naju_affine_chunk_scan
+
+    B_, T, D, N = 2, 128, 32, 32
+    ins = list(_rand_inputs(B_, T, D, N, "cuda", seed=17))
+    ins[1] = ins[1] - 14.0                 # f ~ sigmoid(-12)
+    ref_in = [t.detach().clone().requires_grad_(True) for t in ins]
+    aff_in = [t.detach().clone().requires_grad_(True) for t in ins]
+    g = torch.Generator(device="cpu").manual_seed(19)
+    dy = torch.randn(B_, T, D, generator=g).to("cuda")
+
+    naju_scan_reference(*ref_in).backward(dy)
+    naju_affine_chunk_scan(*aff_in).backward(dy)
+    worst = 0.0
+    for r, a in zip(ref_in, aff_in):
+        assert torch.isfinite(a.grad).all(), "NaN/Inf grad at deep gates"
+        d = maxdiff(r.grad, a.grad)
+        worst = max(worst, d)
+        torch.testing.assert_close(a.grad, r.grad, rtol=1e-4, atol=1e-4)
+    print(f"7. deep-gate (f_logit ~ -12) grads: exact, worst {worst:.2e}")
+
+
 def test_long_sequence():
     from naju.chunk_affine_triton import naju_affine_chunk_scan
     from naju.chunk_triton import naju_chunk_scan
@@ -191,6 +216,7 @@ if __name__ == "__main__":
         test_deep_gate_exactness()
         test_backward_gpu()
         test_bf16_io()
+        test_deep_gate_grads()
         test_long_sequence()
         print("ALL PASS")
     else:
