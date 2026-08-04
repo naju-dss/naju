@@ -235,13 +235,22 @@ def _sb_boundary_states(u, fl, il, B, SB=16):
     Ks = T // SB
     F_s = torch.empty(B_, Ks, D, device=fl.device, dtype=torch.float32)
     W_s = torch.empty(B_, Ks, D, N, device=fl.device, dtype=torch.float32)
-    BD = 64
-    BN = max(16, triton.next_power_of_2(N))
+    BD, BN = _phase_a_config(N)
     grid = (B_ * Ks, triton.cdiv(D, BD))
     _affine_local_kernel[grid](u, fl, il, B, B, F_s, F_s, F_s, W_s,
                                T, D, N, Q=SB, SB=SB, BD=BD, BN=BN,
-                               EMIT_CZ=0, num_warps=2)
+                               EMIT_CZ=0, num_warps=1)
     return _exclusive_scan(F_s, W_s)
+
+
+def _phase_a_config(N):
+    """Tile config for the local-scan kernels, from the §15 shape sweep
+    (D 512-4096, N 32-128, RTX 5090): one warp with a [BD, BN] tile of
+    ~2048 elements wins everywhere — small programs keep registers per
+    thread bounded and let the grid supply the parallelism."""
+    BN = max(16, triton.next_power_of_2(N))
+    BD = 16 if BN >= 128 else 32
+    return BD, BN
 
 
 class _AffineChunkScan(torch.autograd.Function):
@@ -261,14 +270,11 @@ class _AffineChunkScan(torch.autograd.Function):
         P = torch.empty(B_, T, D, device=u.device, dtype=dt)
         Fc = torch.empty(B_, K, D, device=u.device, dtype=torch.float32)
         Wc = torch.empty(B_, K, D, N, device=u.device, dtype=torch.float32)
-        BD = 64
-        BN = max(16, triton.next_power_of_2(N))
+        BD, BN = _phase_a_config(N)
         grid = (B_ * K, triton.cdiv(D, BD))
-        # num_warps=2: the [BD,BN] register tile per program wants few, fat
-        # warps (64 elems/thread) — 4/8 warps spill and run ~3x slower
         _affine_local_kernel[grid](uc, flc, ilc, Bc, Cc, cz, P, Fc, Wc,
                                    T, D, N, Q=Q, SB=16, BD=BD, BN=BN,
-                                   EMIT_CZ=1, num_warps=2)
+                                   EMIT_CZ=1, num_warps=1)
 
         from naju.chunk_bwd_triton import _exclusive_scan
         x_start = _exclusive_scan(Fc, Wc)             # state entering chunk k
