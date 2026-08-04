@@ -31,6 +31,7 @@ Optional sanity checks (naju kernel test suites):
 ```bash
 python naju/tests/test_equivalence.py   # CPU
 python naju/tests/test_gpu_smoke.py     # GPU: all scan backends vs reference
+python naju/tests/test_affine_chunk.py  # GPU: experimental affine backend
 ```
 
 ## Synthetic suite (T1–T4)
