@@ -81,9 +81,14 @@ opt = build_optimizer(model, lr=4e-3, weight_decay=0.1)   # auto-detects the fla
 | `chunk` | **training standard** | GPU + Triton | SSD-style chunk-parallel; exact for `f_logit ≥ −5`, auto-falls back to `cuda` beyond |
 | `cuda` | chunk's fallback; memory-light long-T training | GPU + nvcc (JIT) | exact for any logit; sequential training path with checkpoint-recompute backward, chunk-parallel inference path |
 | `cuda_bw` | **inference standard** | GPU + nvcc (JIT) | warp-shuffle kernels, 2.5–3.2× faster inference; the paper's efficiency tables use this backend under `no_grad` |
+| `affine` | experimental successor to `chunk`/`cuda_bw` | GPU + Triton | hierarchical affine chunk scan: exact for any `f_logit` in forward **and** backward (no fallback backend), native BF16 I/O with FP32 accumulation. On RTX 5090 (BF16) vs `chunk`: forward 2.0–5.7×, training step 1.13–1.85×, forward peak memory ÷2.3–2.5; forward is ~3× `cuda_bw` inference throughput |
 
 Selection order: explicit argument > `NAJU_SCAN_BACKEND` env > auto (`chunk`
-if CUDA is available, else `reference`).
+if CUDA is available, else `reference`). The `affine` backend is opt-in
+(`NAJU_SCAN_BACKEND=affine`) pending broader hardware validation; it is
+implemented in `chunk_affine_triton.py` with its own test suite
+(`tests/test_affine_chunk.py`) and a backend benchmark
+(`tests/bench_scan.py`).
 
 ## torch.compile (recommended for training)
 
@@ -121,10 +126,15 @@ Checkpoints trained with the original research code load directly
 ```bash
 python naju/tests/test_equivalence.py   # CPU: model equivalence, reparam, optimizer coupling
 python naju/tests/test_gpu_smoke.py     # GPU: all scan backends vs reference (fwd + grads)
+python naju/tests/test_affine_chunk.py  # GPU: affine backend (fwd/grads, bf16, deep gates, 32k)
+python naju/tests/bench_scan.py         # GPU: backend latency/memory benchmark (--dtype bf16)
 ```
 
 The CPU suite covers the model math (plus an equivalence check against the
 original research implementation that auto-skips when that repo is not
 present). The GPU suite verifies `chunk`, `cuda`, and `cuda_bw` against the
 reference scan — forward, all input gradients, the deep-logit fallback route,
-and the `no_grad` inference path — in under 100 MiB of GPU memory.
+and the `no_grad` inference path — in under 100 MiB of GPU memory. The affine
+suite adds the chunk-decomposition math check, ragged-length padding, BF16
+I/O tolerances, and the deep-gate (`f_logit ≈ −12`) forward/gradient
+exactness that the decay-ratio backends cannot cover.

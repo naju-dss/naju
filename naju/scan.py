@@ -29,6 +29,11 @@ Backends — one per role, no overlap:
                 guard fallback and the memory-light long-T training path.
     cuda_bw   : cuda/bw.py — warp-shuffle variant. INFERENCE standard
                 (the paper's efficiency tables use this backend under no_grad).
+    affine    : chunk_affine_triton.py — hierarchical affine chunk scan
+                (fused_affine_chunk). Exact for any f_logit in forward AND
+                backward, no fallback backend (backward dispatches between
+                the fast shared v4 kernels in-envelope and an exact
+                affine-native path outside it). Native bf16/fp16 I/O.
 
 Selection order: explicit `backend` argument > NAJU_SCAN_BACKEND env >
 auto ("chunk" when CUDA is available, else "reference").
@@ -58,9 +63,11 @@ def _get(b):
             from naju.cuda import naju_cuda_scan as fn
         elif b == "cuda_bw":
             from naju.cuda.bw import naju_cuda_bw_scan as fn
+        elif b in ("affine", "fused_affine_chunk"):
+            from naju.chunk_affine_triton import naju_affine_chunk_scan as fn
         else:
             raise ValueError(f"unknown scan backend {b!r}; "
-                             f"valid: reference, chunk, cuda, cuda_bw")
+                             f"valid: reference, chunk, cuda, cuda_bw, affine")
         _BACKEND_CACHE[b] = fn
     return fn
 
