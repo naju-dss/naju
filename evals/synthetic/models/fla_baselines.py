@@ -1,7 +1,8 @@
-"""Baseline sequence models (HGRN, GLA, RWKV6, RetNet, Mamba-2) wrapped in the
-same classifier backbone used for Naju: embedding -> N mixer blocks (RMSNorm +
-token-mixer + residual, no separate FFN, matching our SSM blocks) -> last-token
-head. Mixers come from flash-linear-attention and mamba-ssm.
+"""Baseline sequence models (Mamba, Mamba-2, HGRN, GLA, RWKV6, RetNet, xLSTM)
+wrapped in the same classifier backbone used for Naju: embedding -> N mixer
+blocks (RMSNorm + token-mixer + residual, no separate FFN, matching our SSM
+blocks) -> last-token head. Mixers come from flash-linear-attention and
+mamba-ssm.
 """
 import os
 import warnings
@@ -10,7 +11,17 @@ import torch
 import torch.nn as nn
 
 from data import vocab as V
-from models.backbone import RMSNorm
+
+
+class RMSNorm(nn.Module):
+    def __init__(self, d, eps=1e-5):
+        super().__init__()
+        self.eps = eps
+        self.weight = nn.Parameter(torch.ones(d))
+
+    def forward(self, x):
+        norm = x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + self.eps)
+        return norm * self.weight
 
 def _make_mixer(kind, d_model, n_heads, layer_idx, short_conv=True):
     # A short depthwise conv before the token mixer is essential for associative
@@ -32,6 +43,10 @@ def _make_mixer(kind, d_model, n_heads, layer_idx, short_conv=True):
     if kind == "retnet":
         return FL.MultiScaleRetention(hidden_size=d_model, num_heads=n_heads,
                                       use_short_conv=short_conv)
+    if kind == "mamba":
+        # imported lazily so the other baselines work on machines without mamba-ssm
+        from mamba_ssm import Mamba
+        return Mamba(d_model=d_model, d_state=16, d_conv=4, expand=2)
     if kind == "mamba2":
         # imported lazily so the other baselines work on machines without mamba-ssm
         from mamba_ssm import Mamba2

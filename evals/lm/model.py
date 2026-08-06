@@ -1,4 +1,5 @@
-"""Causal LM sharing the exact Naju / Mamba mixers used across the suite.
+"""Causal LM sharing the exact Naju mixer used across the suite; Mamba /
+Mamba-2 baselines come from the official mamba-ssm package.
 
 A causal block is a pre-norm residual with the mixer applied left-to-right only;
 all mixers are causal by construction (left-padded convs sliced to [:T], and a
@@ -13,7 +14,6 @@ import torch.nn as nn
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(os.path.dirname(_HERE)))   # repo root (for naju)
-sys.path.insert(0, os.path.join(os.path.dirname(_HERE), "synthetic"))
 from naju import NajuMixer, RMSNorm
 
 
@@ -24,9 +24,9 @@ def make_mixer(backbone, d_model, cfg):
             gate_conv_kernel=4, forget_bias_init=5.0, input_bias_init=-2.0,
             d_init=cfg.get("d_init", 0.01))
     if backbone == "mamba":
-        from models.ssm_core import MambaMixer
-        return MambaMixer(d_model, d_state=cfg.get("d_state", 16),
-                          d_conv=4, expand=2)
+        from mamba_ssm import Mamba
+        return Mamba(d_model, d_state=cfg.get("d_state", 16),
+                     d_conv=4, expand=2)
     if backbone == "mamba2":
         from mamba_ssm import Mamba2
         return Mamba2(d_model, d_state=cfg.get("d_state", 64),

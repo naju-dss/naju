@@ -1,9 +1,9 @@
-# Mamba reference configuration (d_model 256, d_state 16).
+# Official Mamba-1 (mamba-ssm) baseline; d_state=16, d_conv=4, expand=2 are
+# fixed at the official defaults in models/fla_baselines.py.
 model: mamba
+kind: mamba
 d_model: 256
 n_layers: 4
-d_state: 16
-expand: 2
 dropout: 0.1
 
 lr: 3.0e-4

@@ -1,11 +1,11 @@
 """Model registry for the synthetic suite. build_model(name, cfg, vocab, classes)."""
-from models import backbone, fla_baselines, naju, transformer
+from models import fla_baselines, naju, transformer
 
 _BUILDERS = {
     "naju": naju.build,
-    "mamba": backbone.build,
     "transformer": transformer.build,
     # flash-linear-attention / mamba-ssm / xlstm wrappers (lazy imports)
+    "mamba": fla_baselines.build,
     "mamba2": fla_baselines.build,
     "xlstm": fla_baselines.build,
     "gla": fla_baselines.build,
